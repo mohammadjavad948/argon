@@ -2,6 +2,7 @@ mod bootstrap;
 mod core;
 
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() {
+    bootstrap::init_base().await;
 }
