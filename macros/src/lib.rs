@@ -95,7 +95,7 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
         
         impl argon_core::controller::Controller for #self_ty {
             /// Generates an Axum router from the controller methods
-            pub fn router() -> axum::Router {
+            fn router() -> axum::Router {
                 use axum::Router;
                 
                 let mut router = Router::new();
