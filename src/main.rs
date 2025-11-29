@@ -1,5 +1,5 @@
 mod bootstrap;
-mod core;
+mod app;
 
 
 #[tokio::main]

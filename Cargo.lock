@@ -104,6 +104,8 @@ name = "argon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon_core",
+ "argon_macros",
  "axum",
  "dotenvy",
  "sea-orm",
@@ -112,6 +114,23 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "argon_core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+]
+
+[[package]]
+name = "argon_macros"
+version = "0.1.0"
+dependencies = [
+ "argon_core",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
 ]
 
 [[package]]
