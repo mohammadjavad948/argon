@@ -1,8 +1,7 @@
-pub struct Test;
+pub struct TestController;
 
 #[argon_macros::controller]
-impl Test {
-
+impl TestController {
     #[argon_macros::get("/hello")]
     pub async fn index() {
 

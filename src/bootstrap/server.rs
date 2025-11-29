@@ -1,8 +1,5 @@
 use std::net::SocketAddr;
 
-use axum::Router;
-
-
 
 pub async fn init_server(){
     let port = std::env::var("SERVER_PORT")
@@ -18,7 +15,7 @@ pub async fn init_server(){
         });
 
     // Build the router
-    let app = Router::new();
+    let app = crate::routes::routes().await;
 
     // Start the server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

@@ -1,5 +1,6 @@
 mod bootstrap;
 mod app;
+mod routes;
 
 
 #[tokio::main]

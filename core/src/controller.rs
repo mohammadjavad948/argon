@@ -1,5 +1,5 @@
 
 
 pub trait Controller {
-    fn router() -> axum::Router;
+    fn router() -> impl std::future::Future<Output = axum::Router> + Send;
 }
