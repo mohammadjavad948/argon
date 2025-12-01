@@ -7,5 +7,5 @@ use crate::app::controller::TestController;
 
 pub async fn routes() -> Router {
     Router::new()
-        .nest("/", TestController::router().await)
+        .nest("/", TestController::router())
 }
