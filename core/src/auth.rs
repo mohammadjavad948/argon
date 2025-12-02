@@ -30,6 +30,7 @@ where
     ) -> impl std::future::Future<Output = Result<T, StatusCode>> + Send;
 }
 
+#[tracing::instrument(level = "debug", skip(request, next))]
 pub async fn auth_middleware<T, R>(mut request: Request, next: Next) -> Result<Response, StatusCode>
 where
     T: Authenticator<R> + Send + Sync + 'static,
