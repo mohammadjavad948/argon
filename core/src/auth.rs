@@ -13,8 +13,10 @@ pub trait AuthenticatableUser {
 pub trait Authenticator<T>
     where T: AuthenticatableUser 
 {
-    fn attempt<R>(&self, username: T::Username, password: R) -> impl std::future::Future<Output = anyhow::Result<T>> + Send;
-    fn generate_token<Q>(&self, user: T) -> impl std::future::Future<Output = anyhow::Result<Q>> + Send;
+    type Token;
+
+    fn attempt(&self, username: T::Username, password: T::Password) -> impl std::future::Future<Output = anyhow::Result<T>> + Send;
+    fn generate_token(&self, user: T) -> impl std::future::Future<Output = Self::Token> + Send;
 
     fn verify_header_name(&self) -> &'static str;
     fn verify(&self, token: &str) -> impl std::future::Future<Output = Result<T, StatusCode>> + Send;
