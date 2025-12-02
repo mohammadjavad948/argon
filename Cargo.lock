@@ -120,10 +120,12 @@ dependencies = [
 name = "argon_core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "sea-orm",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
