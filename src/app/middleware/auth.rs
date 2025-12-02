@@ -1,11 +1,10 @@
-use sea_orm::DatabaseConnection;
 pub use argon_core::auth::auth_middleware;
-
+use sea_orm::DatabaseConnection;
 
 struct BasicUser {
     id: i32,
     username: String,
-    password: String
+    password: String,
 }
 
 impl argon_core::auth::AuthenticatableUser for BasicUser {
@@ -27,7 +26,7 @@ impl argon_core::auth::AuthenticatableUser for BasicUser {
 }
 
 pub struct BasicAuthenticator {
-    db: DatabaseConnection
+    db: DatabaseConnection,
 }
 
 impl argon_core::auth::Authenticator<BasicUser> for BasicAuthenticator {
@@ -48,5 +47,4 @@ impl argon_core::auth::Authenticator<BasicUser> for BasicAuthenticator {
     fn verify_header_name(&self) -> &'static str {
         "Auth"
     }
-    
 }

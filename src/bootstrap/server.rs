@@ -3,11 +3,9 @@ use std::net::SocketAddr;
 use axum::Extension;
 use sea_orm::{Database, DatabaseConnection};
 
-
 pub async fn init_server() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").map_err(|err| {
-            anyhow::anyhow!("cannot read `DATABASE_URL`: {:?}", err)
-    })?;
+    let database_url = std::env::var("DATABASE_URL")
+        .map_err(|err| anyhow::anyhow!("cannot read `DATABASE_URL`: {:?}", err))?;
 
     let db: DatabaseConnection = Database::connect(database_url).await?;
 
@@ -24,8 +22,7 @@ pub async fn init_server() -> anyhow::Result<()> {
         });
 
     // Build the router
-    let app = crate::routes::routes()
-        .layer(Extension(db));
+    let app = crate::routes::routes().layer(Extension(db));
 
     // Start the server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));

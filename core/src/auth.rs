@@ -1,4 +1,4 @@
-use axum::{extract::Request, http::{StatusCode}, middleware::Next, response::Response};
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};
 
 pub trait AuthenticatableUser {
     type Username;
@@ -11,21 +11,29 @@ pub trait AuthenticatableUser {
 }
 
 pub trait Authenticator<T>
-    where T: AuthenticatableUser 
+where
+    T: AuthenticatableUser,
 {
     type Token;
 
-    fn attempt(&self, username: T::Username, password: T::Password) -> impl std::future::Future<Output = anyhow::Result<T>> + Send;
+    fn attempt(
+        &self,
+        username: T::Username,
+        password: T::Password,
+    ) -> impl std::future::Future<Output = anyhow::Result<T>> + Send;
     fn generate_token(&self, user: T) -> impl std::future::Future<Output = Self::Token> + Send;
 
     fn verify_header_name(&self) -> &'static str;
-    fn verify(&self, token: &str) -> impl std::future::Future<Output = Result<T, StatusCode>> + Send;
+    fn verify(
+        &self,
+        token: &str,
+    ) -> impl std::future::Future<Output = Result<T, StatusCode>> + Send;
 }
 
-
 pub async fn auth_middleware<T, R>(mut request: Request, next: Next) -> Result<Response, StatusCode>
-    where T: Authenticator<R> + Send + Sync + 'static,
-          R: AuthenticatableUser + Send + Sync + Clone + 'static
+where
+    T: Authenticator<R> + Send + Sync + 'static,
+    R: AuthenticatableUser + Send + Sync + Clone + 'static,
 {
     let Some(authenticator) = request.extensions().get::<T>() else {
         tracing::error!("no Authenticator Extension available");

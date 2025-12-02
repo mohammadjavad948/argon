@@ -1,5 +1,4 @@
-
-pub async fn init_tracing(){
+pub async fn init_tracing() {
     // Initialize tracing with customizable log level from RUST_LOG environment variable
     // Default to "info" if not set
     let default_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());

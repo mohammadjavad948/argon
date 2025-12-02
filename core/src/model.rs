@@ -3,7 +3,7 @@
 use std::fmt::Display;
 
 use sea_orm::FromJsonQueryResult;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct MultilangField(pub Vec<LangField>);
@@ -11,7 +11,7 @@ pub struct MultilangField(pub Vec<LangField>);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LangField {
     pub lang: String,
-    pub content: String
+    pub content: String,
 }
 
 impl MultilangField {
@@ -39,7 +39,7 @@ impl Display for LangField {
 // idk? should i?
 // impl Deref for LangField {
 //     type Target = str;
-// 
+//
 //     fn deref(&self) -> &Self::Target {
 //         &self.content
 //     }

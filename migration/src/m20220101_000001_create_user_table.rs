@@ -15,7 +15,11 @@ impl MigrationTrait for Migration {
                     .col(string("name").not_null())
                     .col(string("username").unique_key().not_null())
                     .col(string("password").not_null())
-                    .col(timestamp("created_at").default(Expr::current_timestamp()).not_null())
+                    .col(
+                        timestamp("created_at")
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await
