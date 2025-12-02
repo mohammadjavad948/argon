@@ -17,7 +17,7 @@ pub trait Authenticator<T>
     fn generate_token<Q>(&self, user: T) -> impl std::future::Future<Output = anyhow::Result<Q>> + Send;
 
     fn verify_header_name(&self) -> &'static str;
-    fn verify(&self, token: &str) -> impl std::future::Future<Output = anyhow::Result<T>> + Send;
+    fn verify(&self, token: &str) -> impl std::future::Future<Output = Result<T, StatusCode>> + Send;
 }
 
 
@@ -37,7 +37,7 @@ pub async fn auth_middleware<T, R>(mut request: Request, next: Next) -> Result<R
 
     let header = header.to_str().map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-    let user = authenticator.verify(header).await.map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let user = authenticator.verify(header).await?;
 
     request.extensions_mut().insert(user);
 
