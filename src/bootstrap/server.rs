@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use axum::Extension;
 use sea_orm::{Database, DatabaseConnection};
 
 
@@ -23,7 +24,8 @@ pub async fn init_server() -> anyhow::Result<()> {
         });
 
     // Build the router
-    let app = crate::routes::routes().await;
+    let app = crate::routes::routes()
+        .layer(Extension(db));
 
     // Start the server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
