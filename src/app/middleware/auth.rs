@@ -1,7 +1,8 @@
 pub use argon_core::auth::auth_middleware;
 use sea_orm::DatabaseConnection;
 
-struct BasicUser {
+#[derive(Clone)]
+pub struct BasicUser {
     id: i32,
     username: String,
     password: String,
@@ -46,5 +47,11 @@ impl argon_core::auth::Authenticator<BasicUser> for BasicAuthenticator {
 
     fn verify_header_name(&self) -> &'static str {
         "Auth"
+    }
+}
+
+impl Clone for BasicAuthenticator {
+    fn clone(&self) -> Self {
+        Self { db: self.db.clone() }
     }
 }
