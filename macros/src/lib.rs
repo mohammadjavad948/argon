@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Attribute, FnArg, ItemImpl, LitStr, Meta};
+use syn::{parse_macro_input, Attribute, FnArg, ImplItem, ItemImpl, LitStr, Meta};
 
 /// Macro that generates an Axum router from struct methods with route attributes
 ///
@@ -24,7 +24,7 @@ use syn::{parse_macro_input, Attribute, FnArg, ItemImpl, LitStr, Meta};
 /// ```
 #[proc_macro_attribute]
 pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let impl_block = parse_macro_input!(input as ItemImpl);
+    let mut impl_block = parse_macro_input!(input as ItemImpl);
     let self_ty = &impl_block.self_ty;
     let struct_name = match &**self_ty {
         syn::Type::Path(type_path) => type_path.path.segments.last().map(|s| &s.ident).unwrap(),
@@ -36,14 +36,14 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let mut route_registrations = Vec::new();
+    let mut openapi_function_names = Vec::new();
 
-    // Iterate through items in the impl block
-    for item in &impl_block.items {
-        if let syn::ImplItem::Fn(method) = item {
+    // Iterate through items in the impl block (mutably so we can add attributes)
+    for item in &mut impl_block.items {
+        if let ImplItem::Fn(method) = item {
             // Check for route attributes
             if let Some((method_name, path)) = extract_route_attr(&method.attrs) {
                 let fn_name = &method.sig.ident;
-                let _fn_vis = &method.vis;
 
                 // Determine if method takes &self, &mut self, or no self
                 let has_self = method
@@ -65,32 +65,54 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                 };
 
                 // Generate route registration based on HTTP method
-                let route_reg = match method_name.as_str() {
-                    "get" => quote! {
-                        router = router.route(#path, axum::routing::get(#handler_call));
-                    },
-                    "post" => quote! {
-                        router = router.route(#path, axum::routing::post(#handler_call));
-                    },
-                    "put" => quote! {
-                        router = router.route(#path, axum::routing::put(#handler_call));
-                    },
-                    "delete" => quote! {
-                        router = router.route(#path, axum::routing::delete(#handler_call));
-                    },
-                    "patch" => quote! {
-                        router = router.route(#path, axum::routing::patch(#handler_call));
-                    },
-                    _ => continue,
-                };
+                let axum_method = format_ident!("{}", method_name);
+                route_registrations.push(quote! {
+                    router = router.route(#path, axum::routing::#axum_method(#handler_call));
+                });
 
-                route_registrations.push(route_reg);
+                // Generate utoipa::path attribute
+                let utoipa_method = format_ident!("{}", method_name);
+                let path_str = path.clone();
+                
+                // Build the attribute tokens - parse as a full attribute by wrapping in a dummy item
+                let attr_tokens = quote! {
+                    #[utoipa::path(
+                        #utoipa_method,
+                        path = #path_str,
+                    )]
+                    fn dummy() {}
+                };
+                
+                // Parse as an ItemFn and extract the attribute
+                match syn::parse2::<syn::ItemFn>(attr_tokens) {
+                    Ok(item_fn) => {
+                        // Extract the first attribute (our utoipa::path attribute)
+                        if let Some(attr) = item_fn.attrs.first().cloned() {
+                            method.attrs.push(attr);
+                        }
+                    }
+                    Err(e) => {
+                        return syn::Error::new(
+                            method.span(),
+                            format!("Failed to parse utoipa attribute: {}", e),
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+                }
+
+                // Save the function name to register in the OpenApi struct later
+                openapi_function_names.push(fn_name.clone());
             }
         }
     }
 
-    // Generate the router function
+    // Create a name for the generated OpenAPI struct: "MyController" -> "MyControllerApi"
+    let api_struct_name = format_ident!("{}Api", struct_name);
+
+    // Generate the router function and OpenAPI struct
     let expanded = quote! {
+        // The modified impl block (now containing #[utoipa::path] attributes)
         #impl_block
 
         impl argon_core::controller::Controller for #self_ty {
@@ -105,6 +127,19 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                 router
             }
         }
+
+        // Auto-generated OpenAPI struct
+        // This creates a struct that lists all the paths found in this controller.
+        // You can nest this into your main ApiDoc.
+        #[derive(utoipa::OpenApi)]
+        #[openapi(
+            paths(
+                #(
+                    #struct_name::#openapi_function_names
+                ),*
+            )
+        )]
+        pub struct #api_struct_name;
     };
 
     TokenStream::from(expanded)
