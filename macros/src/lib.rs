@@ -36,10 +36,10 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     let mut route_registrations = Vec::new();
-    let mut openapi_function_names = Vec::new();
+    let mut openapi_path_functions = Vec::new();
 
-    // Iterate through items in the impl block (mutably so we can add attributes)
-    for item in &mut impl_block.items {
+    // Iterate through items in the impl block
+    for item in &impl_block.items {
         if let ImplItem::Fn(method) = item {
             // Check for route attributes
             if let Some((method_name, path)) = extract_route_attr(&method.attrs) {
@@ -70,49 +70,59 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                     router = router.route(#path, axum::routing::#axum_method(#handler_call));
                 });
 
-                // Generate utoipa::path attribute
+                // Create a wrapper function name for utoipa path documentation
+                // This function will be created outside the impl block with #[utoipa::path]
+                let utoipa_wrapper_name = format_ident!("__utoipa_path_{}", fn_name);
                 let utoipa_method = format_ident!("{}", method_name);
                 let path_str = path.clone();
                 
-                // Build the attribute tokens - parse as a full attribute by wrapping in a dummy item
-                let attr_tokens = quote! {
+                // Extract the function signature parts
+                let fn_vis = &method.vis;
+                let fn_async = method.sig.asyncness;
+                let fn_inputs = &method.sig.inputs;
+                let fn_output = &method.sig.output;
+                let fn_generics = &method.sig.generics;
+                let fn_where_clause = &method.sig.generics.where_clause;
+                
+                // Generate a wrapper function with utoipa::path attribute outside the impl block
+                // The wrapper has the same signature as the original but is just for documentation
+                openapi_path_functions.push(quote! {
+                    /// Auto-generated utoipa path wrapper for #struct_name::#fn_name
+                    /// This function is only for OpenAPI documentation generation.
+                    /// The actual handler is #struct_name::#fn_name
                     #[utoipa::path(
                         #utoipa_method,
                         path = #path_str,
                     )]
-                    fn dummy() {}
-                };
-                
-                // Parse as an ItemFn and extract the attribute
-                match syn::parse2::<syn::ItemFn>(attr_tokens) {
-                    Ok(item_fn) => {
-                        // Extract the first attribute (our utoipa::path attribute)
-                        if let Some(attr) = item_fn.attrs.first().cloned() {
-                            method.attrs.push(attr);
-                        }
+                    #fn_vis #fn_async fn #utoipa_wrapper_name #fn_generics(#fn_inputs) #fn_output #fn_where_clause {
+                        // This function is only for OpenAPI documentation generation
+                        // The actual handler is #struct_name::#fn_name
+                        // This body will never be executed
+                        unimplemented!("This is a documentation-only wrapper function")
                     }
-                    Err(e) => {
-                        return syn::Error::new(
-                            method.span(),
-                            format!("Failed to parse utoipa attribute: {}", e),
-                        )
-                        .to_compile_error()
-                        .into();
-                    }
-                }
-
-                // Save the function name to register in the OpenApi struct later
-                openapi_function_names.push(fn_name.clone());
+                });
             }
         }
     }
 
     // Create a name for the generated OpenAPI struct: "MyController" -> "MyControllerApi"
     let api_struct_name = format_ident!("{}Api", struct_name);
+    
+    // Collect wrapper function names for the OpenAPI paths
+    let mut openapi_path_names = Vec::new();
+    for item in &impl_block.items {
+        if let ImplItem::Fn(method) = item {
+            if extract_route_attr(&method.attrs).is_some() {
+                let fn_name = &method.sig.ident;
+                let wrapper_name = format_ident!("__utoipa_path_{}", fn_name);
+                openapi_path_names.push(wrapper_name);
+            }
+        }
+    }
 
     // Generate the router function and OpenAPI struct
     let expanded = quote! {
-        // The modified impl block (now containing #[utoipa::path] attributes)
+        // The original impl block
         #impl_block
 
         impl argon_core::controller::Controller for #self_ty {
@@ -128,15 +138,16 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
+        // Auto-generated utoipa path wrapper functions (must be at module level)
+        #(#openapi_path_functions)*
+
         // Auto-generated OpenAPI struct
         // This creates a struct that lists all the paths found in this controller.
         // You can nest this into your main ApiDoc.
         #[derive(utoipa::OpenApi)]
         #[openapi(
             paths(
-                #(
-                    #struct_name::#openapi_function_names
-                ),*
+                #(#openapi_path_names),*
             )
         )]
         pub struct #api_struct_name;
@@ -146,7 +157,7 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Extract route information from attributes
-/// Looks for route macro attributes like #[get("/path")]
+/// Looks for route macro attributes like #[get("/path")] or #[argon_macros::get("/path")]
 /// Note: This will only work if the attributes haven't been consumed by attribute macros yet
 fn extract_route_attr(attrs: &[Attribute]) -> Option<(String, String)> {
     for attr in attrs {
@@ -156,7 +167,9 @@ fn extract_route_attr(attrs: &[Attribute]) -> Option<(String, String)> {
             continue;
         }
 
-        let method = path_segments[0].ident.to_string().to_lowercase();
+        // Get the last segment (handles both #[get("/path")] and #[argon_macros::get("/path")])
+        let last_segment = path_segments.last().unwrap();
+        let method = last_segment.ident.to_string().to_lowercase();
         if matches!(method.as_str(), "get" | "post" | "put" | "delete" | "patch") {
             // Try to parse as a list meta (e.g., #[get("/path")])
             if let Meta::List(meta) = &attr.meta {

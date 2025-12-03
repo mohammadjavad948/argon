@@ -1,6 +1,7 @@
+use tokio::io::AsyncWriteExt;
 use utoipa::OpenApi;
 
-use crate::app::controller::*;
+use crate::app::controller::TestControllerApi;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -10,3 +11,18 @@ use crate::app::controller::*;
     info(description = "API Docs")
 )]
 pub struct MainApiDoc;
+
+pub async fn generate_docs() -> anyhow::Result<()> {
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)     // create if not exists
+        .truncate(true)   // truncates existing file → overwrites
+        .open("api.json")
+        .await?;
+
+    let docs = MainApiDoc::openapi().to_pretty_json()?;
+
+    file.write_all(docs.as_bytes()).await?;
+
+    Ok(())
+}
