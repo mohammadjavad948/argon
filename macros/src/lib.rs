@@ -86,13 +86,24 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                 
                 // Generate a wrapper function with utoipa::path attribute outside the impl block
                 // The wrapper has the same signature as the original but is just for documentation
+                // Remove leading slash from path since it will be nested under "/" in MainApiDoc
+                let path_for_utoipa = if path_str.starts_with('/') {
+                    &path_str[1..]
+                } else {
+                    &path_str
+                };
+                let path_lit = syn::LitStr::new(path_for_utoipa, method.span());
+                
+                let struct_name_str = struct_name.to_string();
+                let fn_name_str = fn_name.to_string();
+                
                 openapi_path_functions.push(quote! {
-                    /// Auto-generated utoipa path wrapper for #struct_name::#fn_name
-                    /// This function is only for OpenAPI documentation generation.
-                    /// The actual handler is #struct_name::#fn_name
+                    #[doc = concat!("Auto-generated utoipa path wrapper for ", #struct_name_str, "::", #fn_name_str)]
+                    #[doc = concat!("This function is only for OpenAPI documentation generation.")]
+                    #[doc = concat!("The actual handler is ", #struct_name_str, "::", #fn_name_str)]
                     #[utoipa::path(
                         #utoipa_method,
-                        path = #path_str,
+                        path = #path_lit,
                     )]
                     #fn_vis #fn_async fn #utoipa_wrapper_name #fn_generics(#fn_inputs) #fn_output #fn_where_clause {
                         // This function is only for OpenAPI documentation generation

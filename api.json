@@ -8,6 +8,14 @@
     },
     "version": "0.1.0"
   },
-  "paths": {},
+  "paths": {
+    "/hello": {
+      "get": {
+        "tags": [],
+        "operationId": "__utoipa_path_index",
+        "responses": {}
+      }
+    }
+  },
   "components": {}
 }
