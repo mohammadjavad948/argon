@@ -18,3 +18,4 @@ dotenvy = "0.15.7"
 anyhow = "1.0.100"
 argon_macros = { path = "macros" }
 argon_core = { path = "core" }
+utoipa = {version = "5.4.0", features = ["axum_extras", "chrono", "uuid"]}
