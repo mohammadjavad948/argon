@@ -22,7 +22,8 @@ pub async fn init_server() -> anyhow::Result<()> {
         });
 
     // Build the router
-    let app = crate::routes::routes().layer(Extension(db));
+    let app = crate::routes::routes()
+        .layer(Extension(db));
 
     // Start the server
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
