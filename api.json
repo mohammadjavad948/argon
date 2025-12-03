@@ -9,10 +9,22 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/hello": {
+    "/hello/{id}": {
       "get": {
         "tags": [],
         "operationId": "__utoipa_path_index",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
         "responses": {}
       }
     }
