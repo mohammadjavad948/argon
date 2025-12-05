@@ -97,8 +97,8 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                 let struct_name_str = struct_name.to_string();
                 let fn_name_str = fn_name.to_string();
                 
-                // Extract utoipa_response attribute if present
-                let response_attr = extract_utoipa_response_attr(&method.attrs);
+                // Extract all utoipa_response attributes (supports multiple)
+                let response_attrs = extract_utoipa_response_attrs(&method.attrs);
                 
                 // Build the utoipa::path attribute with optional responses
                 let mut path_attr_tokens = quote! {
@@ -106,11 +106,13 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                     path = #path_lit,
                 };
                 
-                if let Some(responses) = response_attr {
+                if !response_attrs.is_empty() {
                     path_attr_tokens = quote! {
                         #utoipa_method,
                         path = #path_lit,
-                        responses(#responses),
+                        responses(
+                            #(#response_attrs),*
+                        ),
                     };
                 }
                 
@@ -211,14 +213,26 @@ fn extract_route_attr(attrs: &[Attribute]) -> Option<(String, String)> {
     None
 }
 
-/// Extract utoipa_response attribute information
-/// Supports:
+/// Extract all utoipa_response attribute information
+/// Supports multiple attributes for multiple status codes:
 /// - #[utoipa_response(Type)] - simple form, defaults to status 200 with body
 /// - #[utoipa_response(response = Type)] - use Type as IntoResponses (just the type name)
 /// - #[utoipa_response(status = 200, body = Type)] - with explicit status
 /// - #[utoipa_response(status = 200, body = Type, description = "Success")] - with description
-/// Returns the response tokens to be inserted into the utoipa::path attribute
-fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::TokenStream> {
+/// 
+/// Example with multiple responses:
+/// ```rust
+/// #[get("/users/{id}")]
+/// #[utoipa_response(status = 200, body = User, description = "User found")]
+/// #[utoipa_response(status = 404, body = Error, description = "User not found")]
+/// #[utoipa_response(status = 500, body = Error, description = "Internal server error")]
+/// async fn get_user() -> Result<User, Error> { ... }
+/// ```
+/// 
+/// Returns a vector of response tokens to be inserted into the utoipa::path attribute
+fn extract_utoipa_response_attrs(attrs: &[Attribute]) -> Vec<proc_macro2::TokenStream> {
+    let mut responses = Vec::new();
+    
     for attr in attrs {
         let path_segments: Vec<_> = attr.path().segments.iter().collect();
         if path_segments.is_empty() {
@@ -235,9 +249,10 @@ fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::Toke
                 if let Ok(parsed) = syn::parse2::<UtoipaResponseArgs>(tokens.clone()) {
                     // If response is specified, use it as IntoResponses (just the type name)
                     if let Some(response_type) = parsed.response {
-                        return Some(quote! {
+                        responses.push(quote! {
                             #response_type
                         });
+                        continue;
                     }
                     
                     // Otherwise, use body with status/description
@@ -245,9 +260,10 @@ fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::Toke
                         let status = parsed.status.unwrap_or(200);
                         let description = parsed.description.as_deref().unwrap_or("Success");
                         
-                        return Some(quote! {
+                        responses.push(quote! {
                             (status = #status, description = #description, body = #body_type)
                         });
+                        continue;
                     }
                 }
                 
@@ -255,14 +271,15 @@ fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::Toke
                 // This defaults to body type for backward compatibility
                 if let Ok(response_type) = syn::parse2::<Type>(tokens) {
                     // Simple form: just a type, default to status 200 with body
-                    return Some(quote! {
+                    responses.push(quote! {
                         (status = 200, description = "Success", body = #response_type)
                     });
                 }
             }
         }
     }
-    None
+    
+    responses
 }
 
 /// Helper struct to parse utoipa_response attribute arguments
@@ -356,6 +373,8 @@ pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Attribute macro for specifying utoipa response documentation
 /// 
+/// You can chain multiple `#[utoipa_response]` attributes to specify multiple status codes.
+/// 
 /// Usage:
 /// ```rust
 /// // Simple type (defaults to status 200)
@@ -368,10 +387,23 @@ pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
 /// #[utoipa_response(status = 201, body = User, description = "User created")]
 /// async fn create_user() -> String { ... }
 /// 
+/// // Multiple status codes
+/// #[get("/users/{id}")]
+/// #[utoipa_response(status = 200, body = User, description = "User found")]
+/// #[utoipa_response(status = 404, body = Error, description = "User not found")]
+/// #[utoipa_response(status = 500, body = Error, description = "Internal server error")]
+/// async fn get_user() -> Result<User, Error> { ... }
+/// 
 /// // IntoResponses type (like UserResponse<T, N, U, I>)
 /// #[get("/users/{id}")]
 /// #[utoipa_response(response = UserResponse<User, NotFound, Unauthorized, InternalError>)]
 /// async fn get_user() -> UserResponse<...> { ... }
+/// 
+/// // Mix of IntoResponses and individual responses
+/// #[get("/users/{id}")]
+/// #[utoipa_response(response = UserResponse<User, NotFound, Unauthorized, InternalError>)]
+/// #[utoipa_response(status = 503, body = Error, description = "Service unavailable")]
+/// async fn get_user() -> Result<UserResponse<...>, Error> { ... }
 /// ```
 /// 
 /// This attribute is consumed by the `#[controller]` macro to generate
