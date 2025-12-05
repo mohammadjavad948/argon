@@ -213,7 +213,8 @@ fn extract_route_attr(attrs: &[Attribute]) -> Option<(String, String)> {
 
 /// Extract utoipa_response attribute information
 /// Supports:
-/// - #[utoipa_response(Type)] - simple form, defaults to status 200
+/// - #[utoipa_response(Type)] - simple form, defaults to status 200 with body
+/// - #[utoipa_response(response = Type)] - use Type as IntoResponses (just the type name)
 /// - #[utoipa_response(status = 200, body = Type)] - with explicit status
 /// - #[utoipa_response(status = 200, body = Type, description = "Success")] - with description
 /// Returns the response tokens to be inserted into the utoipa::path attribute
@@ -229,23 +230,33 @@ fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::Toke
         if last_segment.ident == "utoipa_response" {
             if let Meta::List(meta) = &attr.meta {
                 let tokens = meta.tokens.clone();
-                // Try to parse as a simple type first (e.g., #[utoipa_response(Pet)])
-                if let Ok(response_type) = syn::parse2::<Type>(tokens.clone()) {
-                    // Simple form: just a type, default to status 200
-                    return Some(quote! {
-                        (status = 200, description = "Success", body = #response_type)
-                    });
+                
+                // Try to parse as named arguments first (e.g., #[utoipa_response(response = UserResponse)])
+                if let Ok(parsed) = syn::parse2::<UtoipaResponseArgs>(tokens.clone()) {
+                    // If response is specified, use it as IntoResponses (just the type name)
+                    if let Some(response_type) = parsed.response {
+                        return Some(quote! {
+                            #response_type
+                        });
+                    }
+                    
+                    // Otherwise, use body with status/description
+                    if let Some(body_type) = parsed.body {
+                        let status = parsed.status.unwrap_or(200);
+                        let description = parsed.description.as_deref().unwrap_or("Success");
+                        
+                        return Some(quote! {
+                            (status = #status, description = #description, body = #body_type)
+                        });
+                    }
                 }
                 
-                // Try to parse as named arguments (e.g., #[utoipa_response(status = 200, body = Pet)])
-                // We'll parse the tokens manually to extract status, body, and description
-                if let Ok(parsed) = syn::parse2::<UtoipaResponseArgs>(tokens) {
-                    let status = parsed.status.unwrap_or(200);
-                    let body = parsed.body;
-                    let description = parsed.description.as_deref().unwrap_or("Success");
-                    
+                // Try to parse as a simple type (e.g., #[utoipa_response(Pet)])
+                // This defaults to body type for backward compatibility
+                if let Ok(response_type) = syn::parse2::<Type>(tokens) {
+                    // Simple form: just a type, default to status 200 with body
                     return Some(quote! {
-                        (status = #status, description = #description, body = #body)
+                        (status = 200, description = "Success", body = #response_type)
                     });
                 }
             }
@@ -258,7 +269,8 @@ fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::Toke
 #[derive(Debug)]
 struct UtoipaResponseArgs {
     status: Option<u16>,
-    body: Type,
+    body: Option<Type>,
+    response: Option<Type>,
     description: Option<String>,
 }
 
@@ -266,6 +278,7 @@ impl syn::parse::Parse for UtoipaResponseArgs {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let mut status = None;
         let mut body = None;
+        let mut response = None;
         let mut description = None;
         
         // Parse comma-separated key-value pairs
@@ -280,6 +293,9 @@ impl syn::parse::Parse for UtoipaResponseArgs {
             } else if key_str == "body" {
                 let _eq: syn::Token![=] = input.parse()?;
                 body = Some(input.parse()?);
+            } else if key_str == "response" {
+                let _eq: syn::Token![=] = input.parse()?;
+                response = Some(input.parse()?);
             } else if key_str == "description" {
                 let _eq: syn::Token![=] = input.parse()?;
                 let lit: LitStr = input.parse()?;
@@ -294,11 +310,15 @@ impl syn::parse::Parse for UtoipaResponseArgs {
             }
         }
         
-        let body = body.ok_or_else(|| input.error("Missing required 'body' argument"))?;
+        // Either body or response must be specified, but not both
+        if body.is_some() && response.is_some() {
+            return Err(input.error("Cannot specify both 'body' and 'response'. Use 'body' for simple types or 'response' for IntoResponses types."));
+        }
         
         Ok(UtoipaResponseArgs {
             status,
             body,
+            response,
             description,
         })
     }
@@ -338,13 +358,20 @@ pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
 /// 
 /// Usage:
 /// ```rust
+/// // Simple type (defaults to status 200)
 /// #[get("/users")]
 /// #[utoipa_response(User)]
 /// async fn get_users() -> String { ... }
 /// 
+/// // Simple type with explicit status
 /// #[post("/users")]
 /// #[utoipa_response(status = 201, body = User, description = "User created")]
 /// async fn create_user() -> String { ... }
+/// 
+/// // IntoResponses type (like UserResponse<T, N, U, I>)
+/// #[get("/users/{id}")]
+/// #[utoipa_response(response = UserResponse<User, NotFound, Unauthorized, InternalError>)]
+/// async fn get_user() -> UserResponse<...> { ... }
 /// ```
 /// 
 /// This attribute is consumed by the `#[controller]` macro to generate
