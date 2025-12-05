@@ -538,3 +538,260 @@ fn route_attr_macro(_method: &str, _args: TokenStream, input: TokenStream) -> To
     // Let's add it as a doc attribute that the router can parse
     input
 }
+
+/// Macro that generates a response enum with IntoResponse implementation
+///
+/// Usage:
+/// ```rust
+/// response! {
+///     StatusCode::OK = User,
+///     StatusCode::NOT_FOUND = NotFoundError,
+///     StatusCode::UNAUTHORIZED = UnauthorizedError, "Authentication required",
+///     StatusCode::INTERNAL_SERVER_ERROR = InternalError, "An internal error occurred"
+/// }
+/// ```
+///
+/// You can optionally provide a custom description as a string literal after the type.
+/// If no description is provided, one will be auto-generated from the status code name.
+///
+/// This generates an enum similar to:
+/// ```rust
+/// #[derive(utoipa::IntoResponses)]
+/// pub enum Response {
+///     #[response(status = 200, description = "Ok")]
+///     Ok(User),
+///     #[response(status = 404, description = "Not found")]
+///     NotFound(NotFoundError),
+///     #[response(status = 401, description = "Authentication required")]
+///     Unauthorized(UnauthorizedError),
+///     ...
+/// }
+/// 
+/// impl axum::response::IntoResponse for Response
+/// where
+///     User: serde::Serialize + utoipa::ToSchema,
+///     NotFoundError: serde::Serialize + utoipa::ToSchema,
+///     ...
+/// {
+///     fn into_response(self) -> axum::response::Response { ... }
+/// }
+/// ```
+#[proc_macro]
+pub fn response(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ResponseMacroInput);
+    
+    let entries = &input.entries;
+    
+    if entries.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "response! macro requires at least one status code and type pair"
+        )
+        .to_compile_error()
+        .into();
+    }
+    
+    // Extract status codes, types, and generate variant names
+    let mut status_codes = Vec::new();
+    let mut types = Vec::new();
+    let mut variant_names = Vec::new();
+    let mut variant_idents = Vec::new();
+    let mut status_code_constants = Vec::new();
+    let mut descriptions = Vec::new();
+    
+    for entry in entries {
+        // Extract status code constant (e.g., StatusCode::OK -> OK)
+        let status_code_constant = extract_status_code_constant(&entry.status_code);
+        status_code_constants.push(status_code_constant.clone());
+        
+        // Generate variant name from status code (e.g., OK -> Ok, NOT_FOUND -> NotFound)
+        let variant_name = status_code_to_variant_name(&status_code_constant);
+        variant_names.push(variant_name.clone());
+        variant_idents.push(format_ident!("{}", variant_name));
+        
+        // Store the type
+        types.push(&entry.response_type);
+        
+        // Store the full status code path for IntoResponse implementation
+        status_codes.push(&entry.status_code);
+        
+        // Use custom description if provided, otherwise generate from status code name
+        let description = entry.description.as_ref()
+            .map(|s| s.value())
+            .unwrap_or_else(|| status_code_to_description(&status_code_constant));
+        descriptions.push(description);
+    }
+    
+    
+    // Generate enum variants with utoipa attributes using actual types
+    let enum_variants: Vec<_> = variant_idents
+        .iter()
+        .zip(types.iter())
+        .zip(descriptions.iter())
+        .zip(status_code_constants.iter())
+        .map(|(((variant, ty), desc), status_const)| {
+            let status_code_num = status_code_constant_to_number(status_const);
+            quote! {
+                #[response(status = #status_code_num, description = #desc)]
+                #variant(#ty),
+            }
+        })
+        .collect();
+    
+    // Generate match arms for IntoResponse
+    // Extract the constant name from each status code path for use in the match arm
+    let status_code_constants_for_match: Vec<_> = status_codes
+        .iter()
+        .map(|path| {
+            if let Some(segment) = path.segments.last() {
+                format_ident!("{}", segment.ident)
+            } else {
+                format_ident!("OK")
+            }
+        })
+        .collect();
+    
+    let match_arms: Vec<_> = variant_idents
+        .iter()
+        .zip(status_code_constants_for_match.iter())
+        .map(|(variant, status_const)| {
+            quote! {
+                Self::#variant(data) => (axum::http::StatusCode::#status_const, axum::Json(data)).into_response(),
+            }
+        })
+        .collect();
+    
+    // Generate the enum name (could be made configurable, but for now use Response)
+    let enum_name = format_ident!("Response");
+    
+    let expanded = quote! {
+        #[derive(utoipa::IntoResponses)]
+        pub enum #enum_name {
+            #(#enum_variants)*
+        }
+        
+        impl axum::response::IntoResponse for #enum_name {
+            fn into_response(self) -> axum::response::Response {
+                match self {
+                    #(#match_arms)*
+                }
+            }
+        }
+    };
+    
+    TokenStream::from(expanded)
+}
+
+/// Parse the input for the response! macro
+struct ResponseMacroInput {
+    entries: Vec<ResponseEntry>,
+}
+
+struct ResponseEntry {
+    status_code: syn::Path,
+    response_type: Type,
+    description: Option<LitStr>,
+}
+
+impl syn::parse::Parse for ResponseMacroInput {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut entries = Vec::new();
+        
+        while !input.is_empty() {
+            // Parse StatusCode::CONSTANT
+            let status_code: syn::Path = input.parse()?;
+            
+            // Parse =
+            let _eq: syn::Token![=] = input.parse()?;
+            
+            // Parse the response type
+            let response_type: Type = input.parse()?;
+            
+            // Optionally parse a description string literal
+            let description = if input.peek(LitStr) {
+                Some(input.parse::<LitStr>()?)
+            } else {
+                None
+            };
+            
+            entries.push(ResponseEntry {
+                status_code,
+                response_type,
+                description,
+            });
+            
+            // Check for comma
+            if !input.is_empty() {
+                let _comma: syn::Token![,] = input.parse()?;
+            }
+        }
+        
+        Ok(ResponseMacroInput { entries })
+    }
+}
+
+/// Extract the constant name from a StatusCode path
+/// e.g., StatusCode::OK -> "OK"
+fn extract_status_code_constant(path: &syn::Path) -> String {
+    if let Some(segment) = path.segments.last() {
+        segment.ident.to_string()
+    } else {
+        "UNKNOWN".to_string()
+    }
+}
+
+/// Convert status code constant to variant name
+/// e.g., "OK" -> "Ok", "NOT_FOUND" -> "NotFound", "INTERNAL_SERVER_ERROR" -> "InternalServerError"
+fn status_code_to_variant_name(status_code: &str) -> String {
+    status_code
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+            }
+        })
+        .collect()
+}
+
+/// Convert status code constant to description
+/// e.g., "OK" -> "Ok", "NOT_FOUND" -> "Not found"
+fn status_code_to_description(status_code: &str) -> String {
+    status_code
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Convert status code constant to HTTP status number
+/// This is a simplified mapping - you might want to make this more comprehensive
+fn status_code_constant_to_number(status_code: &str) -> u16 {
+    match status_code {
+        "OK" => 200,
+        "CREATED" => 201,
+        "NO_CONTENT" => 204,
+        "BAD_REQUEST" => 400,
+        "UNAUTHORIZED" => 401,
+        "FORBIDDEN" => 403,
+        "NOT_FOUND" => 404,
+        "METHOD_NOT_ALLOWED" => 405,
+        "CONFLICT" => 409,
+        "UNPROCESSABLE_ENTITY" => 422,
+        "INTERNAL_SERVER_ERROR" => 500,
+        "BAD_GATEWAY" => 502,
+        "SERVICE_UNAVAILABLE" => 503,
+        _ => {
+            // Try to extract number from constant name if it follows a pattern
+            // For now, default to 200 if unknown
+            200
+        }
+    }
+}
