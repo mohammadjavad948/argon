@@ -543,11 +543,18 @@ fn route_attr_macro(_method: &str, _args: TokenStream, input: TokenStream) -> To
 ///
 /// Usage:
 /// ```rust
+/// // Simple form (generates enum named "Response")
 /// response! {
 ///     StatusCode::OK = User,
-///     StatusCode::NOT_FOUND = NotFoundError,
-///     StatusCode::UNAUTHORIZED = UnauthorizedError, "Authentication required",
-///     StatusCode::INTERNAL_SERVER_ERROR = InternalError, "An internal error occurred"
+///     StatusCode::NOT_FOUND = NotFoundError
+/// }
+///
+/// // With custom enum name
+/// response! {
+///     BasicResponse {
+///         StatusCode::OK = String, "user found",
+///         StatusCode::NOT_FOUND = NotFoundError, "user not found"
+///     }
 /// }
 /// ```
 ///
@@ -557,19 +564,17 @@ fn route_attr_macro(_method: &str, _args: TokenStream, input: TokenStream) -> To
 /// This generates an enum similar to:
 /// ```rust
 /// #[derive(utoipa::IntoResponses)]
-/// pub enum Response {
-///     #[response(status = 200, description = "Ok")]
-///     Ok(User),
-///     #[response(status = 404, description = "Not found")]
+/// pub enum BasicResponse {
+///     #[response(status = 200, description = "user found")]
+///     Ok(String),
+///     #[response(status = 404, description = "user not found")]
 ///     NotFound(NotFoundError),
-///     #[response(status = 401, description = "Authentication required")]
-///     Unauthorized(UnauthorizedError),
 ///     ...
 /// }
 /// 
-/// impl axum::response::IntoResponse for Response
+/// impl axum::response::IntoResponse for BasicResponse
 /// where
-///     User: serde::Serialize + utoipa::ToSchema,
+///     String: serde::Serialize + utoipa::ToSchema,
 ///     NotFoundError: serde::Serialize + utoipa::ToSchema,
 ///     ...
 /// {
@@ -661,8 +666,11 @@ pub fn response(input: TokenStream) -> TokenStream {
         })
         .collect();
     
-    // Generate the enum name (could be made configurable, but for now use Response)
-    let enum_name = format_ident!("Response");
+    // Use custom enum name if provided, otherwise default to "Response"
+    let enum_name = input.enum_name
+        .as_ref()
+        .map(|ident| format_ident!("{}", ident))
+        .unwrap_or_else(|| format_ident!("Response"));
     
     let expanded = quote! {
         #[derive(utoipa::IntoResponses)]
@@ -684,6 +692,7 @@ pub fn response(input: TokenStream) -> TokenStream {
 
 /// Parse the input for the response! macro
 struct ResponseMacroInput {
+    enum_name: Option<syn::Ident>,
     entries: Vec<ResponseEntry>,
 }
 
@@ -695,24 +704,49 @@ struct ResponseEntry {
 
 impl syn::parse::Parse for ResponseMacroInput {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        // Check if we have a custom enum name followed by braces
+        let (enum_name, content) = if input.peek(syn::Ident) && input.peek2(syn::token::Brace) {
+            let name: syn::Ident = input.parse()?;
+            let content;
+            syn::braced!(content in input);
+            (Some(name), Some(content))
+        } else {
+            (None, None)
+        };
+        
+        // Use the content stream if we have braces, otherwise use the main input
+        let parse_stream = if let Some(ref content) = content {
+            content
+        } else {
+            input
+        };
+        
         let mut entries = Vec::new();
         
-        while !input.is_empty() {
+        while !parse_stream.is_empty() {
             // Parse StatusCode::CONSTANT
-            let status_code: syn::Path = input.parse()?;
+            let status_code: syn::Path = parse_stream.parse()?;
             
             // Parse =
-            let _eq: syn::Token![=] = input.parse()?;
+            let _eq: syn::Token![=] = parse_stream.parse()?;
             
             // Parse the response type
-            let response_type: Type = input.parse()?;
+            let response_type: Type = parse_stream.parse()?;
             
-            // Optionally parse a description string literal
-            let description = if input.peek(LitStr) {
-                Some(input.parse::<LitStr>()?)
+            // Check if there's a comma (required before description or next entry)
+            let has_comma = parse_stream.peek(syn::Token![,]);
+            if has_comma {
+                let _comma: syn::Token![,] = parse_stream.parse()?;
+            }
+            
+            // Optionally parse a description string literal (after comma)
+            let description = if parse_stream.peek(LitStr) {
+                Some(parse_stream.parse::<LitStr>()?)
             } else {
                 None
             };
+            
+            let has_description = description.is_some();
             
             entries.push(ResponseEntry {
                 status_code,
@@ -720,13 +754,18 @@ impl syn::parse::Parse for ResponseMacroInput {
                 description,
             });
             
-            // Check for comma
-            if !input.is_empty() {
-                let _comma: syn::Token![,] = input.parse()?;
+            // If we parsed a description, check for another comma if there are more entries
+            if has_description && !parse_stream.is_empty() {
+                if parse_stream.peek(syn::Token![,]) {
+                    let _comma: syn::Token![,] = parse_stream.parse()?;
+                }
             }
         }
         
-        Ok(ResponseMacroInput { entries })
+        Ok(ResponseMacroInput { 
+            enum_name,
+            entries 
+        })
     }
 }
 
