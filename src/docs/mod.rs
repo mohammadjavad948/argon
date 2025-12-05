@@ -2,12 +2,14 @@ use tokio::io::AsyncWriteExt;
 use utoipa::OpenApi;
 
 use crate::app::controller::TestControllerApi;
+use crate::app::response::SimpleResponse;
 
 #[derive(OpenApi)]
 #[openapi(
     nest(
         (path = "/", api = TestControllerApi)
     ),
+    components(schemas(SimpleResponse)),
     info(description = "API Docs")
 )]
 pub struct MainApiDoc;

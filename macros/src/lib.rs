@@ -137,19 +137,60 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
     // Create a name for the generated OpenAPI struct: "MyController" -> "MyControllerApi"
     let api_struct_name = format_ident!("{}Api", struct_name);
     
-    // Collect wrapper function names for the OpenAPI paths
+    // Collect wrapper function names for the OpenAPI paths and extract schema types
     let mut openapi_path_names = Vec::new();
+    let mut schema_types = Vec::new();
+    
     for item in &impl_block.items {
         if let ImplItem::Fn(method) = item {
             if extract_route_attr(&method.attrs).is_some() {
                 let fn_name = &method.sig.ident;
                 let wrapper_name = format_ident!("__utoipa_path_{}", fn_name);
                 openapi_path_names.push(wrapper_name);
+                
+                // Extract schema types from utoipa_response attributes
+                let response_types = extract_response_schema_types(&method.attrs);
+                schema_types.extend(response_types);
             }
+        }
+    }
+    
+    // Remove duplicates from schema_types (comparing by string representation)
+    let mut unique_schemas = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for schema_type in schema_types {
+        let type_str = quote!(#schema_type).to_string();
+        if !seen.contains(&type_str) {
+            seen.insert(type_str);
+            unique_schemas.push(schema_type);
         }
     }
 
     // Generate the router function and OpenAPI struct
+    // Conditionally include components section if we have schemas
+    let openapi_attr = if unique_schemas.is_empty() {
+        quote! {
+            #[derive(utoipa::OpenApi)]
+            #[openapi(
+                paths(
+                    #(#openapi_path_names),*
+                )
+            )]
+        }
+    } else {
+        quote! {
+            #[derive(utoipa::OpenApi)]
+            #[openapi(
+                paths(
+                    #(#openapi_path_names),*
+                ),
+                components(schemas(
+                    #(#unique_schemas),*
+                ))
+            )]
+        }
+    };
+    
     let expanded = quote! {
         // The original impl block
         #impl_block
@@ -173,12 +214,7 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
         // Auto-generated OpenAPI struct
         // This creates a struct that lists all the paths found in this controller.
         // You can nest this into your main ApiDoc.
-        #[derive(utoipa::OpenApi)]
-        #[openapi(
-            paths(
-                #(#openapi_path_names),*
-            )
-        )]
+        #openapi_attr
         pub struct #api_struct_name;
     };
 
@@ -280,6 +316,79 @@ fn extract_utoipa_response_attrs(attrs: &[Attribute]) -> Vec<proc_macro2::TokenS
     }
     
     responses
+}
+
+/// Extract schema types from utoipa_response attributes
+/// Returns a vector of types that should be included in components(schemas(...))
+fn extract_response_schema_types(attrs: &[Attribute]) -> Vec<Type> {
+    let mut schema_types = Vec::new();
+    
+    for attr in attrs {
+        let path_segments: Vec<_> = attr.path().segments.iter().collect();
+        if path_segments.is_empty() {
+            continue;
+        }
+
+        let last_segment = path_segments.last().unwrap();
+        if last_segment.ident == "utoipa_response" {
+            if let Meta::List(meta) = &attr.meta {
+                let tokens = meta.tokens.clone();
+                
+                // Try to parse as named arguments
+                if let Ok(parsed) = syn::parse2::<UtoipaResponseArgs>(tokens.clone()) {
+                    // Add body type if present
+                    if let Some(body_type) = parsed.body {
+                        schema_types.push(body_type);
+                    }
+                    
+                    // For response types (IntoResponses), extract generic parameters
+                    // Note: Type aliases won't be resolved here, but utoipa should handle them
+                    if let Some(response_type) = parsed.response {
+                        // Extract types from generic parameters (if it's a generic type, not a type alias)
+                        extract_types_from_generic(&response_type, &mut schema_types);
+                        // Don't add the response type itself if it's likely a type alias or enum
+                        // Utoipa will handle IntoResponses types automatically
+                    }
+                    continue;
+                }
+                
+                // Try to parse as a simple type
+                if let Ok(response_type) = syn::parse2::<Type>(tokens) {
+                    schema_types.push(response_type);
+                }
+            }
+        }
+    }
+    
+    schema_types
+}
+
+/// Recursively extract types from generic type parameters
+/// For example, CoreResponse<T, N, U, I> would extract T, N, U, I
+fn extract_types_from_generic(ty: &Type, schema_types: &mut Vec<Type>) {
+    match ty {
+        Type::Path(type_path) => {
+            if let Some(path_segment) = type_path.path.segments.last() {
+                match &path_segment.arguments {
+                    syn::PathArguments::AngleBracketed(args) => {
+                        for arg in &args.args {
+                            match arg {
+                                syn::GenericArgument::Type(ty) => {
+                                    // Recursively extract from nested generics
+                                    extract_types_from_generic(ty, schema_types);
+                                    // Add the type itself
+                                    schema_types.push(ty.clone());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Helper struct to parse utoipa_response attribute arguments
