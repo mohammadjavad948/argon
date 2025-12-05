@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Attribute, FnArg, ImplItem, ItemImpl, LitStr, Meta};
+use syn::{parse_macro_input, Attribute, FnArg, ImplItem, ItemImpl, LitStr, Meta, Type, LitInt};
 
 /// Macro that generates an Axum router from struct methods with route attributes
 ///
@@ -24,7 +24,7 @@ use syn::{parse_macro_input, Attribute, FnArg, ImplItem, ItemImpl, LitStr, Meta}
 /// ```
 #[proc_macro_attribute]
 pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
-    let mut impl_block = parse_macro_input!(input as ItemImpl);
+    let impl_block = parse_macro_input!(input as ItemImpl);
     let self_ty = &impl_block.self_ty;
     let struct_name = match &**self_ty {
         syn::Type::Path(type_path) => type_path.path.segments.last().map(|s| &s.ident).unwrap(),
@@ -97,13 +97,29 @@ pub fn controller(_args: TokenStream, input: TokenStream) -> TokenStream {
                 let struct_name_str = struct_name.to_string();
                 let fn_name_str = fn_name.to_string();
                 
+                // Extract utoipa_response attribute if present
+                let response_attr = extract_utoipa_response_attr(&method.attrs);
+                
+                // Build the utoipa::path attribute with optional responses
+                let mut path_attr_tokens = quote! {
+                    #utoipa_method,
+                    path = #path_lit,
+                };
+                
+                if let Some(responses) = response_attr {
+                    path_attr_tokens = quote! {
+                        #utoipa_method,
+                        path = #path_lit,
+                        responses(#responses),
+                    };
+                }
+                
                 openapi_path_functions.push(quote! {
                     #[doc = concat!("Auto-generated utoipa path wrapper for ", #struct_name_str, "::", #fn_name_str)]
                     #[doc = concat!("This function is only for OpenAPI documentation generation.")]
                     #[doc = concat!("The actual handler is ", #struct_name_str, "::", #fn_name_str)]
                     #[utoipa::path(
-                        #utoipa_method,
-                        path = #path_lit,
+                        #path_attr_tokens
                     )]
                     #fn_vis #fn_async fn #utoipa_wrapper_name #fn_generics(#fn_inputs) #fn_output #fn_where_clause {
                         // This function is only for OpenAPI documentation generation
@@ -195,6 +211,99 @@ fn extract_route_attr(attrs: &[Attribute]) -> Option<(String, String)> {
     None
 }
 
+/// Extract utoipa_response attribute information
+/// Supports:
+/// - #[utoipa_response(Type)] - simple form, defaults to status 200
+/// - #[utoipa_response(status = 200, body = Type)] - with explicit status
+/// - #[utoipa_response(status = 200, body = Type, description = "Success")] - with description
+/// Returns the response tokens to be inserted into the utoipa::path attribute
+fn extract_utoipa_response_attr(attrs: &[Attribute]) -> Option<proc_macro2::TokenStream> {
+    for attr in attrs {
+        let path_segments: Vec<_> = attr.path().segments.iter().collect();
+        if path_segments.is_empty() {
+            continue;
+        }
+
+        // Get the last segment (handles both #[utoipa_response(...)] and #[argon_macros::utoipa_response(...)])
+        let last_segment = path_segments.last().unwrap();
+        if last_segment.ident == "utoipa_response" {
+            if let Meta::List(meta) = &attr.meta {
+                let tokens = meta.tokens.clone();
+                // Try to parse as a simple type first (e.g., #[utoipa_response(Pet)])
+                if let Ok(response_type) = syn::parse2::<Type>(tokens.clone()) {
+                    // Simple form: just a type, default to status 200
+                    return Some(quote! {
+                        (status = 200, description = "Success", body = #response_type)
+                    });
+                }
+                
+                // Try to parse as named arguments (e.g., #[utoipa_response(status = 200, body = Pet)])
+                // We'll parse the tokens manually to extract status, body, and description
+                if let Ok(parsed) = syn::parse2::<UtoipaResponseArgs>(tokens) {
+                    let status = parsed.status.unwrap_or(200);
+                    let body = parsed.body;
+                    let description = parsed.description.as_deref().unwrap_or("Success");
+                    
+                    return Some(quote! {
+                        (status = #status, description = #description, body = #body)
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Helper struct to parse utoipa_response attribute arguments
+#[derive(Debug)]
+struct UtoipaResponseArgs {
+    status: Option<u16>,
+    body: Type,
+    description: Option<String>,
+}
+
+impl syn::parse::Parse for UtoipaResponseArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut status = None;
+        let mut body = None;
+        let mut description = None;
+        
+        // Parse comma-separated key-value pairs
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            let key_str = key.to_string();
+            
+            if key_str == "status" {
+                let _eq: syn::Token![=] = input.parse()?;
+                let lit: LitInt = input.parse()?;
+                status = Some(lit.base10_parse::<u16>()?);
+            } else if key_str == "body" {
+                let _eq: syn::Token![=] = input.parse()?;
+                body = Some(input.parse()?);
+            } else if key_str == "description" {
+                let _eq: syn::Token![=] = input.parse()?;
+                let lit: LitStr = input.parse()?;
+                description = Some(lit.value());
+            } else {
+                return Err(syn::Error::new(key.span(), format!("Unknown argument: {}", key_str)));
+            }
+            
+            // Check for comma
+            if !input.is_empty() {
+                let _comma: syn::Token![,] = input.parse()?;
+            }
+        }
+        
+        let body = body.ok_or_else(|| input.error("Missing required 'body' argument"))?;
+        
+        Ok(UtoipaResponseArgs {
+            status,
+            body,
+            description,
+        })
+    }
+}
+
 /// Macro for GET route
 #[proc_macro_attribute]
 pub fn get(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -223,6 +332,27 @@ pub fn delete(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn patch(args: TokenStream, input: TokenStream) -> TokenStream {
     route_attr_macro("patch", args, input)
+}
+
+/// Attribute macro for specifying utoipa response documentation
+/// 
+/// Usage:
+/// ```rust
+/// #[get("/users")]
+/// #[utoipa_response(User)]
+/// async fn get_users() -> String { ... }
+/// 
+/// #[post("/users")]
+/// #[utoipa_response(status = 201, body = User, description = "User created")]
+/// async fn create_user() -> String { ... }
+/// ```
+/// 
+/// This attribute is consumed by the `#[controller]` macro to generate
+/// OpenAPI documentation. It's a pass-through macro that doesn't modify the function.
+#[proc_macro_attribute]
+pub fn utoipa_response(_args: TokenStream, input: TokenStream) -> TokenStream {
+    // Pass through - the controller macro will read this attribute
+    input
 }
 
 /// Helper function for route attribute macros
