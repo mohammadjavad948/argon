@@ -1,8 +1,12 @@
 
+use axum::http::StatusCode;
 
 #[derive(serde::Serialize, utoipa::ToSchema)]
 pub struct SimpleResponse {
     pub message: String
 }
 
-pub type BasicResponse = argon_core::response::CoreResponse<SimpleResponse, SimpleResponse, SimpleResponse, SimpleResponse>;
+argon_macros::response! {
+    StatusCode::OK = String, "user found"
+}
+
