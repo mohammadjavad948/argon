@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Attribute, FnArg, ImplItem, ItemImpl, LitStr, Meta, Type, LitInt};
+use syn::{parse_macro_input, Attribute, Data, DataStruct, DeriveInput, FnArg, Fields, ImplItem, ItemImpl, LitStr, Meta, Type, LitInt};
 
 /// Macro that generates an Axum router from struct methods with route attributes
 ///
@@ -833,4 +833,117 @@ fn status_code_constant_to_number(status_code: &str) -> u16 {
             200
         }
     }
+}
+
+/// Derive macro for configuration structs
+/// 
+/// This macro generates:
+/// - A `OnceCell` for lazy initialization
+/// - A `get()` method that returns the full config
+/// - Individual getter methods for each field
+/// 
+/// Usage:
+/// ```rust
+/// use argon_core::config::ConfigBuilder;
+/// use argon_macros::Config;
+/// 
+/// #[derive(Clone, Config)]
+/// pub struct AppConfig {
+///     pub port: u16,
+///     pub database_url: String,
+/// }
+/// 
+/// impl ConfigBuilder for AppConfig {
+///     fn build() -> anyhow::Result<Self> {
+///         // Your implementation here
+///         Ok(AppConfig {
+///             port: 3000,
+///             database_url: "postgres://...".to_string(),
+///         })
+///     }
+/// }
+/// ```
+/// 
+/// This will generate:
+/// - `AppConfig::get() -> AppConfig` - returns the full config
+/// - `AppConfig::port() -> u16` - returns just the port field
+/// - `AppConfig::database_url() -> String` - returns just the database_url field
+#[proc_macro_derive(Config)]
+pub fn derive_config(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = &input.ident;
+    
+    // Extract fields from the struct
+    let fields = match &input.data {
+        Data::Struct(DataStruct {
+            fields: Fields::Named(fields),
+            ..
+        }) => &fields.named,
+        _ => {
+            return syn::Error::new(
+                input.span(),
+                "Config derive macro only supports structs with named fields"
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+    
+    // Generate OnceCell constant name (e.g., AppConfig -> APP_CONFIG)
+    let cell_name = format_ident!(
+        "{}",
+        struct_name.to_string().to_uppercase()
+    );
+    
+    // Collect field names and types
+    let field_names: Vec<_> = fields
+        .iter()
+        .map(|f| f.ident.as_ref().unwrap())
+        .collect();
+    
+    let field_types: Vec<_> = fields
+        .iter()
+        .map(|f| &f.ty)
+        .collect();
+    
+    // Generate getter methods for each field
+    let field_getters: Vec<_> = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(field_name, field_type)| {
+            let getter_name = field_name;
+            quote! {
+                pub async fn #getter_name() -> #field_type {
+                    #cell_name
+                        .get_or_init(async || {
+                            <#struct_name as argon_core::config::ConfigBuilder>::build().unwrap()
+                        })
+                        .await
+                        .#field_name
+                        .clone()
+                }
+            }
+        })
+        .collect();
+    
+    let expanded = quote! {
+        // OnceCell for lazy initialization
+        static #cell_name: tokio::sync::OnceCell<#struct_name> = tokio::sync::OnceCell::const_new();
+        
+        impl #struct_name {
+            /// Get the full configuration instance
+            pub async fn get() -> #struct_name {
+                #cell_name
+                    .get_or_init(async || {
+                        <#struct_name as argon_core::config::ConfigBuilder>::build().unwrap()
+                    })
+                    .await
+                    .clone()
+            }
+            
+            #(#field_getters)*
+        }
+    };
+    
+    TokenStream::from(expanded)
 }

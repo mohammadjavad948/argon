@@ -1,15 +1,14 @@
-use tokio::sync::OnceCell;
+use argon_core::config::ConfigBuilder;
+use argon_macros::Config;
 
-const APP: OnceCell<AppConfig> = OnceCell::const_new();
-
-#[derive(Clone)]
+#[derive(Clone, Config)]
 pub struct AppConfig {
     pub port: u16,
-    pub database_url: String
+    pub database_url: String,
 }
 
-impl AppConfig {
-    fn new() -> anyhow::Result<Self> {
+impl ConfigBuilder for AppConfig {
+    fn build() -> anyhow::Result<Self> {
         let port = std::env::var("SERVER_PORT")
             .unwrap_or_else(|_| {
                 tracing::warn!("cannot read `SERVER_PORT` defaulting to `3000`");
@@ -26,33 +25,5 @@ impl AppConfig {
             .map_err(|err| anyhow::anyhow!("cannot read `DATABASE_URL`: {:?}", err))?;
 
         Ok(AppConfig { port, database_url })
-    }
-
-    pub async fn get() -> AppConfig {
-        APP
-        .get_or_init(async || {
-            AppConfig::new().unwrap()
-        })
-        .await
-        .clone()
-    }
-
-    pub async fn port() -> u16 {
-        APP
-        .get_or_init(async || {
-            AppConfig::new().unwrap()
-        })
-        .await
-        .port
-    }
-
-    pub async fn database_url() -> String {
-        APP
-        .get_or_init(async || {
-            AppConfig::new().unwrap()
-        })
-        .await
-        .database_url
-        .clone()
     }
 }
