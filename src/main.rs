@@ -2,6 +2,7 @@ mod app;
 mod bootstrap;
 mod routes;
 mod docs;
+mod config;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -3,25 +3,16 @@ use std::net::SocketAddr;
 use axum::Extension;
 use sea_orm::{Database, DatabaseConnection};
 
+use crate::config::app::AppConfig;
+
 pub async fn init_server() -> anyhow::Result<()> {
     crate::docs::generate_docs().await?;
 
-    let database_url = std::env::var("DATABASE_URL")
-        .map_err(|err| anyhow::anyhow!("cannot read `DATABASE_URL`: {:?}", err))?;
+    let database_url = AppConfig::database_url().await;
 
     let db: DatabaseConnection = Database::connect(database_url).await?;
 
-    let port = std::env::var("SERVER_PORT")
-        .unwrap_or_else(|_| {
-            tracing::warn!("cannot read `SERVER_PORT` defaulting to `3000`");
-
-            "3000".into()
-        })
-        .parse()
-        .unwrap_or_else(|_| {
-            tracing::error!("cannot parse `SERVER_PORT`. defaulting to 3000");
-            3000
-        });
+    let port = AppConfig::port().await;
 
     // Build the router
     let app = crate::routes::routes()
